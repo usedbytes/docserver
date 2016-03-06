@@ -22,6 +22,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"github.com/shurcooL/github_flavored_markdown"
 	"io/ioutil"
@@ -30,32 +31,58 @@ import (
 	"path/filepath"
 )
 
-func serveError(err error, w http.ResponseWriter) {
-	fmt.Fprintf(w, "Error: %s", err)
+type RequestError struct {
+	Url  string
+	Msg  string
+	Code int
 }
 
-func serveMarkdown(file string, w http.ResponseWriter) {
-		md, err := ioutil.ReadFile(file)
-		if err != nil {
-			fmt.Fprintf(w, "Couldn't read %s", file)
-			return
-		}
+func (e *RequestError) Error() string {
+	return fmt.Sprintf("%s: %s", e.Url, e.Msg)
+}
 
-		mu := github_flavored_markdown.Markdown(md)
-		l, err := w.Write(mu)
-		if l != len(mu) || err != nil {
-			fmt.Printf("Error writing file.\n")
+func handleError(w http.ResponseWriter, r *http.Request, err error) {
+	switch e := err.(type) {
+	case *os.PathError, *os.LinkError:
+		if os.IsNotExist(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+		} else if os.IsPermission(err) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+		} else {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
+	case *RequestError:
+		http.Error(w, err.Error(), e.Code)
+	default:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
+	md, err := ioutil.ReadFile(file)
+	if err != nil {
+		handleError(w, r, &RequestError{r.URL.Path, "Couldn't read file",
+			http.StatusNotFound})
 		return
+	}
+
+	mu := github_flavored_markdown.Markdown(md)
+	l, err := w.Write(mu)
+	if l != len(mu) || err != nil {
+		fmt.Printf("Error writing file.\n")
+	}
+	return
 }
 
-func serveFile(file string, w http.ResponseWriter) {
-	if filepath.Ext(file) == ".md" {
-		serveMarkdown(file, w)
+func handleFile(w http.ResponseWriter, r *http.Request) {
+	filename := r.URL.Path
+	if filepath.Ext(filename) == ".md" {
+		serveMarkdown(w, r, filename)
 	} else {
-		dat, err := ioutil.ReadFile(file)
+		dat, err := ioutil.ReadFile(filename)
 		if err != nil {
-			fmt.Fprintf(w, "Couldn't read %s", file)
+			handleError(w, r, &RequestError{r.URL.Path, "Couldn't read file",
+				http.StatusNotFound})
 			return
 		}
 
@@ -67,79 +94,116 @@ func serveFile(file string, w http.ResponseWriter) {
 	}
 }
 
-func validateFile(filename string) (newname string, err error) {
-	fmt.Printf("Validate '%s'\n", filename)
-	fi, err := os.Lstat(filename)
+const maxLinkLevels = 5
+
+func isSymLink(fi os.FileInfo) bool {
+	return fi.Mode()&os.ModeSymlink != 0
+}
+
+func rootPath(path string, root string) string {
+	return filepath.Clean(filepath.Join(root, path))
+}
+
+func resolvePath(path string, root string) (newpath string, err error) {
+	path = rootPath(path, root)
+	fi, err := os.Lstat(path)
 	if err != nil {
-		return filename, err
+		return path, err
 	}
 
-	if (fi.Mode() & os.ModeSymlink) != 0 {
-		for level := 0; level < 5; level++ {
-			filename, err = os.Readlink(filename)
-			if err != nil {
-				return filename, err
-			}
+	for level := 0; isSymLink(fi) && level < maxLinkLevels; level++ {
+		path, err = os.Readlink(path)
+		if err != nil {
+			return path, err
+		}
+		path = rootPath(path, root)
 
-			fi, err := os.Lstat(filename)
-			if err != nil {
-				return filename, err
-			}
+		fi, err = os.Lstat(path)
+		if err != nil {
+			return path, err
+		}
 
-			if (fi.Mode() & os.ModeSymlink) == 0 {
-				break;
-			}
+		if !isSymLink(fi) {
+			break
 		}
 	}
-
-	filename = filepath.Clean(filepath.Join(".", filename))
-	if len(filename) > 1 && filename[:2] == ".." {
-		return filename, os.ErrPermission
+	if isSymLink(fi) {
+		return path, errors.New("Too many levels of indirection")
 	}
 
-	f, err := os.Open(filename)
-	if err == nil {
-		defer f.Close()
-	}
-	return filename, err
+	return path, nil
 }
 
 var indexes = []string{
 	"index.md",
 	"README.md",
-};
+}
 
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	p := filepath.Join(".", r.URL.Path)
-	p = filepath.Clean(p)
+const Root string = "."
 
-	p, err := validateFile(p)
+func resolveRequest(r *http.Request) error {
+	p := filepath.Clean(filepath.Join(Root, r.URL.Path))
+
+	p, err := resolvePath(p, Root)
 	if err != nil {
-		serveError(err, w)
-		return
+		return err
 	}
 
+	// Resolve an index page if needed
 	fi, err := os.Stat(p)
 	if err != nil {
-		serveError(err, w)
-		return;
+		return err
 	} else if fi.IsDir() {
 		// Search for indexes
 		for _, i := range indexes {
 			var index string
-			index, err = validateFile(filepath.Join(p, i))
+			index, err = resolvePath(filepath.Join(p, i), Root)
 			if err == nil {
 				p = index
-				break;
+				break
 			}
 		}
+		// No index found
 		if err != nil {
-			serveError(err, w)
-			return
+			return errors.New(fmt.Sprintf("Failed to get index for '%s'", p))
+		}
+
+		// Check the index isn't another directory
+		fi, err = os.Stat(p)
+		if err != nil {
+			return err
+		} else if fi.IsDir() {
+			return errors.New(fmt.Sprintf("Found directory looking for '%s'",
+				p))
 		}
 	}
 
-	serveFile(p, w)
+	// Not allowed to traverse above Root
+	p, err = filepath.Rel(Root, p)
+	if len(p) > 1 && p[:2] == ".." {
+		return os.ErrPermission
+	}
+
+	// Finally, check for access to the URL
+	f, err := os.Open(p)
+	if err == nil {
+		r.URL.Path = p
+		defer f.Close()
+	}
+
+	return err
+}
+
+func handleRequest(w http.ResponseWriter, r *http.Request) {
+	request_path := r.URL.Path
+	fmt.Printf("Request: %s\n", request_path)
+
+	err := resolveRequest(r)
+	if err != nil {
+		handleError(w, r, err)
+	} else {
+		handleFile(w, r)
+	}
 }
 
 func main() {
