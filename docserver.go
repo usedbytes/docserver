@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"github.com/shurcooL/github_flavored_markdown"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,7 +42,15 @@ func (e *RequestError) Error() string {
 	return fmt.Sprintf("%s: %s", e.Url, e.Msg)
 }
 
+func dumpRequest(r *http.Request) string {
+	return fmt.Sprintf("From: %s -> %s %s%s",
+		r.RemoteAddr, r.Method, r.Host, r.RequestURI)
+}
+
 func handleError(w http.ResponseWriter, r *http.Request, err error) {
+
+	log.Printf("`-> Error: %s '%s'\n", r.URL.Path, err.Error())
+
 	switch e := err.(type) {
 	case *os.PathError, *os.LinkError:
 		if os.IsNotExist(err) {
@@ -59,6 +68,7 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 }
 
 func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
+	log.Printf("`-> Serving markdown: %s\n", file)
 	md, err := ioutil.ReadFile(file)
 	if err != nil {
 		handleError(w, r, &RequestError{r.URL.Path, "Couldn't read file",
@@ -69,7 +79,7 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 	mu := github_flavored_markdown.Markdown(md)
 	l, err := w.Write(mu)
 	if l != len(mu) || err != nil {
-		fmt.Printf("Error writing file.\n")
+		log.Printf("*-> Error: wrote %d of %d bytes\n", l, len(mu))
 	}
 	return
 }
@@ -79,6 +89,7 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 	if filepath.Ext(filename) == ".md" {
 		serveMarkdown(w, r, filename)
 	} else {
+		log.Printf("`-> Serving file: %s\n", filename)
 		dat, err := ioutil.ReadFile(filename)
 		if err != nil {
 			handleError(w, r, &RequestError{r.URL.Path, "Couldn't read file",
@@ -88,7 +99,7 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 
 		l, err := w.Write(dat)
 		if l != len(dat) || err != nil {
-			fmt.Printf("Error writing file.\n")
+			log.Printf("*-> Error: wrote %d of %d bytes\n", l, len(dat))
 		}
 		return
 	}
@@ -116,6 +127,7 @@ func resolvePath(path string, root string) (newpath string, err error) {
 		if err != nil {
 			return path, err
 		}
+		log.Printf("|-> Link to: %s", path)
 		path = rootPath(path, root)
 
 		fi, err = os.Lstat(path)
@@ -157,6 +169,7 @@ func resolveRequest(r *http.Request) error {
 		// Search for indexes
 		for _, i := range indexes {
 			var index string
+			log.Printf("|-> Find index: %s\n", filepath.Join(p, i))
 			index, err = resolvePath(filepath.Join(p, i), Root)
 			if err == nil {
 				p = index
@@ -181,6 +194,7 @@ func resolveRequest(r *http.Request) error {
 	// Not allowed to traverse above Root
 	p, err = filepath.Rel(Root, p)
 	if len(p) > 1 && p[:2] == ".." {
+		log.Printf("|-> Traverse above root: %s", p)
 		return os.ErrPermission
 	}
 
@@ -195,18 +209,20 @@ func resolveRequest(r *http.Request) error {
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
-	request_path := r.URL.Path
-	fmt.Printf("Request: %s\n", request_path)
+	log.Printf("%s\n", dumpRequest(r))
 
 	err := resolveRequest(r)
 	if err != nil {
 		handleError(w, r, err)
 	} else {
+		log.Printf("|-> Resolved: %s\n", r.URL.Path)
 		handleFile(w, r)
 	}
 }
 
 func main() {
+	port := ":8080"
+	log.Printf("Serving on port '%s'\n", port)
 	http.HandleFunc("/", handleRequest)
-	http.ListenAndServe(":8080", nil)
+	http.ListenAndServe(port, nil)
 }
