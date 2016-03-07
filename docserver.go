@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"text/template"
 )
 
 type RequestError struct {
@@ -67,6 +68,27 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
+const defaultPage string = `
+<html>
+	<head>
+		<title>{{ .Title }}</title>
+		<meta charset="utf-8">
+	</head>
+	<body>
+		<article>
+		{{ .Markup }}
+		</article>
+	</body>
+</html>
+`
+
+var pageTemplate *template.Template
+
+type Page struct {
+	Title  string
+	Markup string
+}
+
 func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 	log.Printf("`-> Serving markdown: %s\n", file)
 	md, err := ioutil.ReadFile(file)
@@ -76,10 +98,13 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 		return
 	}
 
-	mu := github_flavored_markdown.Markdown(md)
-	l, err := w.Write(mu)
-	if l != len(mu) || err != nil {
-		log.Printf("*-> Error: wrote %d of %d bytes\n", l, len(mu))
+	page := &Page{
+		Title:  file,
+		Markup: string(github_flavored_markdown.Markdown(md)[:]),
+	}
+	err = pageTemplate.Execute(w, page)
+	if err != nil {
+		log.Printf("*-> Error: %s\n", err)
 	}
 	return
 }
@@ -221,6 +246,12 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	var err error
+	pageTemplate, err = template.New("page").Parse(defaultPage)
+	if err != nil {
+		log.Printf("Error parsing template: %s\n", err)
+	}
+
 	port := ":8080"
 	log.Printf("Serving on port '%s'\n", port)
 	http.HandleFunc("/", handleRequest)
