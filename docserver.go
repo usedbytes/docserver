@@ -27,6 +27,7 @@ import (
 	"github.com/shurcooL/github_flavored_markdown"
 	"io/ioutil"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -111,10 +112,15 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 
 func handleFile(w http.ResponseWriter, r *http.Request) {
 	filename := r.URL.Path
-	if filepath.Ext(filename) == ".md" {
+	ext := filepath.Ext(filename)
+	if ext == ".md" {
 		serveMarkdown(w, r, filename)
 	} else {
 		log.Printf("`-> Serving file: %s\n", filename)
+		mimeType := mime.TypeByExtension(ext)
+		if mimeType != "" {
+			w.Header().Set("Content-Type", mimeType)
+		}
 		dat, err := ioutil.ReadFile(filename)
 		if err != nil {
 			handleError(w, r, &RequestError{r.URL.Path, "Couldn't read file",
