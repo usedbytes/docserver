@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"syscall"
 	"text/template"
 )
 
@@ -274,9 +275,20 @@ func runServer(c *cli.Context) {
 	}
 
 	root = c.GlobalString("root")
-	addr := c.GlobalString("addr")
+	log.Printf("Document root: %s\n", root)
 
+	if c.GlobalBool("chroot") {
+		log.Printf("`-> chroot() into document root\n")
+		err = syscall.Chroot(root)
+		if err != nil {
+			log.Fatalf("chroot() failed: %s\n", err)
+		}
+		root = "/"
+	}
+
+	addr := c.GlobalString("addr")
 	log.Printf("Serving on '%s'\n", addr)
+
 	http.HandleFunc("/", handleRequest)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
@@ -305,6 +317,11 @@ func main() {
 			Name:  "addr",
 			Value: ":8000",
 			Usage: "addr:port to listen on",
+		},
+		cli.BoolFlag{
+			Name: "chroot",
+			Usage: "If set, the server will chroot() to its document root " +
+				   "upon starting",
 		},
 	}
 	app.Action = runServer
