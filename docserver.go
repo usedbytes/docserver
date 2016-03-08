@@ -32,6 +32,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"text/template"
 )
@@ -45,6 +46,8 @@ var indexes = []string{
 	"index.md",
 	"README.md",
 }
+
+var filters []*regexp.Regexp
 
 const defaultPage string = `
 <html>
@@ -239,6 +242,15 @@ func resolveRequest(r *http.Request) (string, error) {
 		return "", os.ErrPermission
 	}
 
+	// Filter
+	for _, rex := range filters {
+		if rex.MatchString(p) {
+			log.Printf("|-> Matched on filter: %s", rex)
+			return "", &RequestError{r.URL.Path, "Request filtered",
+				http.StatusNotFound}
+		}
+	}
+
 	// Finally, check for access to the URL
 	f, err := os.Open(p)
 	if err == nil {
@@ -286,6 +298,18 @@ func runServer(c *cli.Context) {
 		root = "/"
 	}
 
+	filterFlag := c.GlobalStringSlice("filter")
+	if len(filterFlag) > 0 {
+		filters = make([]*regexp.Regexp, len(filterFlag))
+		for i, f := range filterFlag {
+			log.Printf("Adding filter: %s\n", f)
+			filters[i], err = regexp.Compile(f)
+			if err != nil {
+				log.Fatalf("`-> regexp.Compile failed: %s", err)
+			}
+		}
+	}
+
 	addr := c.GlobalString("addr")
 	log.Printf("Serving on '%s'\n", addr)
 
@@ -322,6 +346,11 @@ func main() {
 			Name: "chroot",
 			Usage: "If set, the server will chroot() to its document root " +
 				   "upon starting",
+		},
+		cli.StringSliceFlag{
+			Name: "filter",
+			Usage: "Regular expression to use for request filtering.\n" +
+				"\tAny requests which resolve to a file matching any filter will 404",
 		},
 	}
 	app.Action = runServer
