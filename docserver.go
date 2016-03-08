@@ -24,6 +24,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"github.com/codegangsta/cli"
 	"github.com/shurcooL/github_flavored_markdown"
 	"io/ioutil"
 	"log"
@@ -33,6 +34,30 @@ import (
 	"path/filepath"
 	"text/template"
 )
+
+var pageTemplate *template.Template
+var root string
+
+const maxLinkLevels = 5
+
+var indexes = []string{
+	"index.md",
+	"README.md",
+}
+
+const defaultPage string = `
+<html>
+	<head>
+		<title>{{ .Title }}</title>
+		<meta charset="utf-8">
+	</head>
+	<body>
+		<article>
+		{{ .Markup }}
+		</article>
+	</body>
+</html>
+`
 
 type RequestError struct {
 	Url  string
@@ -68,22 +93,6 @@ func handleError(w http.ResponseWriter, r *http.Request, err error) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
 }
-
-const defaultPage string = `
-<html>
-	<head>
-		<title>{{ .Title }}</title>
-		<meta charset="utf-8">
-	</head>
-	<body>
-		<article>
-		{{ .Markup }}
-		</article>
-	</body>
-</html>
-`
-
-var pageTemplate *template.Template
 
 type Page struct {
 	Title  string
@@ -136,8 +145,6 @@ func handleFile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-const maxLinkLevels = 5
-
 func isSymLink(fi os.FileInfo) bool {
 	return fi.Mode()&os.ModeSymlink != 0
 }
@@ -177,17 +184,10 @@ func resolvePath(path string, root string) (newpath string, err error) {
 	return path, nil
 }
 
-var indexes = []string{
-	"index.md",
-	"README.md",
-}
-
-const Root string = "."
-
 func resolveRequest(r *http.Request) error {
-	p := filepath.Clean(filepath.Join(Root, r.URL.Path))
+	p := filepath.Clean(filepath.Join(root, r.URL.Path))
 
-	p, err := resolvePath(p, Root)
+	p, err := resolvePath(p, root)
 	if err != nil {
 		return err
 	}
@@ -201,7 +201,7 @@ func resolveRequest(r *http.Request) error {
 		for _, i := range indexes {
 			var index string
 			log.Printf("|-> Find index: %s\n", filepath.Join(p, i))
-			index, err = resolvePath(filepath.Join(p, i), Root)
+			index, err = resolvePath(filepath.Join(p, i), root)
 			if err == nil {
 				p = index
 				break
@@ -222,8 +222,8 @@ func resolveRequest(r *http.Request) error {
 		}
 	}
 
-	// Not allowed to traverse above Root
-	p, err = filepath.Rel(Root, p)
+	// Not allowed to traverse above root
+	p, err = filepath.Rel(root, p)
 	if len(p) > 1 && p[:2] == ".." {
 		log.Printf("|-> Traverse above root: %s", p)
 		return os.ErrPermission
@@ -251,15 +251,55 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func main() {
+func runServer(c *cli.Context) {
 	var err error
-	pageTemplate, err = template.New("page").Parse(defaultPage)
+
+	templateFile := c.GlobalString("template")
+	if templateFile == "" {
+		pageTemplate, err = template.New("page").Parse(defaultPage)
+	} else {
+		pageTemplate, err = template.ParseFiles(templateFile)
+	}
 	if err != nil {
 		log.Printf("Error parsing template: %s\n", err)
+		return
 	}
 
-	port := ":8080"
-	log.Printf("Serving on port '%s'\n", port)
+	root = c.GlobalString("root")
+	addr := c.GlobalString("addr")
+
+	log.Printf("Serving on '%s'\n", addr)
 	http.HandleFunc("/", handleRequest)
-	http.ListenAndServe(port, nil)
+	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+func main() {
+	app := cli.NewApp()
+	app.Name = "docserver"
+	app.Usage = "Simple webserver for serving markdown files"
+	app.Version = "0.0.1"
+	app.Flags = []cli.Flag{
+		cli.StringFlag{
+			Name:  "template",
+			Value: "",
+			Usage: "Template file for rendering Markdown pages - see text/template.\n" +
+				"\tIf not provided, then a default template is used which defines a basic HTML page\n" +
+				"\tAvailable variables:\n" +
+				"\t\t.Title:  Page title\n" +
+				"\t\t.Markup: HTML page content",
+		},
+		cli.StringFlag{
+			Name:  "root",
+			Value: ".",
+			Usage: "Root directory to serve files from",
+		},
+		cli.StringFlag{
+			Name:  "addr",
+			Value: ":8000",
+			Usage: "addr:port to listen on",
+		},
+	}
+	app.Action = runServer
+
+	app.Run(os.Args)
 }
