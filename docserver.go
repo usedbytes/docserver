@@ -154,17 +154,24 @@ func rootPath(path string, root string) string {
 }
 
 func resolvePath(path string) (newpath string, err error) {
+	log.Printf("|-> Resolving: %s", path)
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return path, err
 	}
 
 	for level := 0; isSymLink(fi) && level < maxLinkLevels; level++ {
-		path, err = os.Readlink(path)
+		target, err := os.Readlink(path)
 		if err != nil {
 			return path, err
 		}
-		log.Printf("|-> Link to: %s", path)
+		if filepath.IsAbs(target) {
+			path = target
+			log.Printf("|-> Link to: %s", path)
+		} else {
+			path = filepath.Join(filepath.Dir(path), target)
+			log.Printf("|-> Link to: %s (%s)", path, target)
+		}
 
 		fi, err = os.Lstat(path)
 		if err != nil {
