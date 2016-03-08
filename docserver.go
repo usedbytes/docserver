@@ -267,11 +267,11 @@ func runServer(c *cli.Context) {
 	if templateFile == "" {
 		pageTemplate, err = template.New("page").Parse(defaultPage)
 	} else {
+		log.Printf("Using template: %s\n", templateFile)
 		pageTemplate, err = template.ParseFiles(templateFile)
 	}
 	if err != nil {
-		log.Printf("Error parsing template: %s\n", err)
-		return
+		log.Fatalf("Error parsing template: %s\n", err)
 	}
 
 	root = c.GlobalString("root")
