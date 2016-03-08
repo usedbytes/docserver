@@ -108,8 +108,9 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 		return
 	}
 
+	title, _ := filepath.Rel(root, file)
 	page := &Page{
-		Title:  file,
+		Title:  title,
 		Markup: string(github_flavored_markdown.Markdown(md)[:]),
 	}
 	err = pageTemplate.Execute(w, page)
@@ -119,8 +120,7 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 	return
 }
 
-func handleFile(w http.ResponseWriter, r *http.Request) {
-	filename := r.URL.Path
+func handleFile(w http.ResponseWriter, r *http.Request, filename string) {
 	ext := filepath.Ext(filename)
 	if ext == ".md" {
 		serveMarkdown(w, r, filename)
@@ -153,8 +153,7 @@ func rootPath(path string, root string) string {
 	return filepath.Clean(filepath.Join(root, path))
 }
 
-func resolvePath(path string, root string) (newpath string, err error) {
-	path = rootPath(path, root)
+func resolvePath(path string) (newpath string, err error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
 		return path, err
@@ -166,7 +165,6 @@ func resolvePath(path string, root string) (newpath string, err error) {
 			return path, err
 		}
 		log.Printf("|-> Link to: %s", path)
-		path = rootPath(path, root)
 
 		fi, err = os.Lstat(path)
 		if err != nil {
@@ -184,24 +182,24 @@ func resolvePath(path string, root string) (newpath string, err error) {
 	return path, nil
 }
 
-func resolveRequest(r *http.Request) error {
+func resolveRequest(r *http.Request) (string, error) {
 	p := filepath.Clean(filepath.Join(root, r.URL.Path))
 
-	p, err := resolvePath(p, root)
+	p, err := resolvePath(p)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// Resolve an index page if needed
 	fi, err := os.Stat(p)
 	if err != nil {
-		return err
+		return "", err
 	} else if fi.IsDir() {
 		// Search for indexes
 		for _, i := range indexes {
 			var index string
 			log.Printf("|-> Find index: %s\n", filepath.Join(p, i))
-			index, err = resolvePath(filepath.Join(p, i), root)
+			index, err = resolvePath(filepath.Join(p, i))
 			if err == nil {
 				p = index
 				break
@@ -209,45 +207,48 @@ func resolveRequest(r *http.Request) error {
 		}
 		// No index found
 		if err != nil {
-			return errors.New(fmt.Sprintf("Failed to get index for '%s'", p))
+			return "", errors.New(fmt.Sprintf("Failed to get index for '%s'", p))
 		}
 
 		// Check the index isn't another directory
 		fi, err = os.Stat(p)
 		if err != nil {
-			return err
+			return "", err
 		} else if fi.IsDir() {
-			return errors.New(fmt.Sprintf("Found directory looking for '%s'",
+			return "", errors.New(fmt.Sprintf("Found directory looking for '%s'",
 				p))
 		}
 	}
 
 	// Not allowed to traverse above root
-	p, err = filepath.Rel(root, p)
-	if len(p) > 1 && p[:2] == ".." {
-		log.Printf("|-> Traverse above root: %s", p)
-		return os.ErrPermission
+	relp, err := filepath.Rel(root, p)
+	if err != nil {
+		log.Printf("|-> Couldn't get relative path: %s", p)
+		return "", &RequestError{r.URL.Path, "No relative path",
+			http.StatusNotFound}
+	} else if len(relp) > 1 && relp[:2] == ".." {
+		log.Printf("|-> Traverse above root: %s", relp)
+		return "", os.ErrPermission
 	}
 
 	// Finally, check for access to the URL
 	f, err := os.Open(p)
 	if err == nil {
-		r.URL.Path = p
 		defer f.Close()
 	}
 
-	return err
+	return p, err
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s\n", dumpRequest(r))
 
-	err := resolveRequest(r)
+	file, err := resolveRequest(r)
 	if err != nil {
 		handleError(w, r, err)
 	} else {
-		log.Printf("|-> Resolved: %s\n", r.URL.Path)
-		handleFile(w, r)
+		log.Printf("|-> Resolved: %s\n", file)
+		handleFile(w, r, file)
 	}
 }
 
