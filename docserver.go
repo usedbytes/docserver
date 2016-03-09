@@ -38,6 +38,7 @@ import (
 )
 
 var pageTemplate *template.Template
+var errorTemplate *template.Template
 var root string
 
 const maxLinkLevels = 5
@@ -63,6 +64,27 @@ const defaultPage string = `
 </html>
 `
 
+const errorPage string = `
+<html>
+	<head>
+		<title>Error {{ .Code }}</title>
+		<meta charset="utf-8">
+	</head>
+	<body>
+		<article>
+		<h1>Error {{ .Code }}</h1>
+		<p>{{ .Url }}: {{ .Msg }}</p>
+		</article>
+	</body>
+</html>
+`
+
+var errorMsgs = map[int]string{
+	http.StatusNotFound: "Not found",
+	http.StatusForbidden: "Forbidden",
+	http.StatusInternalServerError: "Internal Server Error",
+}
+
 type RequestError struct {
 	Url  string
 	Msg  string
@@ -81,20 +103,32 @@ func dumpRequest(r *http.Request) string {
 func handleError(w http.ResponseWriter, r *http.Request, err error) {
 
 	log.Printf("`-> Error: %s '%s'\n", r.URL.Path, err.Error())
+	var showError RequestError
 
 	switch e := err.(type) {
 	case *os.PathError, *os.LinkError:
 		if os.IsNotExist(err) {
-			http.Error(w, err.Error(), http.StatusNotFound)
+			showError = RequestError{r.URL.Path, errorMsgs[http.StatusNotFound],
+				http.StatusNotFound}
 		} else if os.IsPermission(err) {
-			http.Error(w, err.Error(), http.StatusForbidden)
+			showError = RequestError{r.URL.Path, errorMsgs[http.StatusForbidden],
+				http.StatusForbidden}
 		} else {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			showError = RequestError{r.URL.Path, errorMsgs[http.StatusInternalServerError],
+				http.StatusInternalServerError}
 		}
 	case *RequestError:
-		http.Error(w, err.Error(), e.Code)
+		showError = RequestError{r.URL.Path, errorMsgs[e.Code],
+			e.Code}
 	default:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		showError = RequestError{r.URL.Path, errorMsgs[http.StatusInternalServerError],
+			http.StatusInternalServerError}
+	}
+
+	w.WriteHeader(showError.Code)
+	err = errorTemplate.Execute(w, showError)
+	if err != nil {
+		log.Printf("*-> Error: %s\n", err)
 	}
 }
 
@@ -286,6 +320,17 @@ func runServer(c *cli.Context) {
 		log.Fatalf("Error parsing template: %s\n", err)
 	}
 
+	templateFile = c.GlobalString("error-template")
+	if templateFile == "" {
+		errorTemplate, err = template.New("error-page").Parse(errorPage)
+	} else {
+		log.Printf("Using error-template: %s\n", templateFile)
+		errorTemplate, err = template.ParseFiles(templateFile)
+	}
+	if err != nil {
+		log.Fatalf("Error parsing error-template: %s\n", err)
+	}
+
 	root = c.GlobalString("root")
 	log.Printf("Document root: %s\n", root)
 
@@ -331,6 +376,16 @@ func main() {
 				"\tAvailable variables:\n" +
 				"\t\t.Title:  Page title\n" +
 				"\t\t.Markup: HTML page content",
+		},
+		cli.StringFlag{
+			Name:  "error-template",
+			Value: "",
+			Usage: "Template file for rendering error pages - see text/template.\n" +
+				"\tIf not provided, then a default template is used which defines a basic HTML page\n" +
+				"\tAvailable variables:\n" +
+				"\t\t.Url:  Requested URL\n" +
+				"\t\t.Code: HTTP status code\n" +
+				"\t\t.Msg:  Error message",
 		},
 		cli.StringFlag{
 			Name:  "root",
