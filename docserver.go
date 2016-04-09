@@ -183,6 +183,11 @@ func handleFile(w http.ResponseWriter, r *http.Request, filename string) {
 	}
 }
 
+func handleRedirect(w http.ResponseWriter, r *http.Request, to string) {
+	log.Printf("`-> Redirecting -> %s", to)
+	http.Redirect(w, r, to, http.StatusFound)
+}
+
 func isSymLink(fi os.FileInfo) bool {
 	return fi.Mode()&os.ModeSymlink != 0
 }
@@ -227,60 +232,51 @@ func resolvePath(path string) (newpath string, err error) {
 	return path, nil
 }
 
-func resolveRequest(r *http.Request) (string, error) {
-	p := filepath.Clean(filepath.Join(root, r.URL.Path))
-
-	p, err := resolvePath(p)
-	if err != nil {
-		return "", err
+func findIndex(dir string, r *http.Request) (index string, err error) {
+	for _, i := range indexes {
+		log.Printf("|-> Find index: %s\n", filepath.Join(dir, i))
+		index, err = resolvePath(filepath.Join(dir, i))
+		if err == nil {
+			break
+		}
 	}
 
-	// Resolve an index page if needed
-	fi, err := os.Stat(p)
+	// No index found
+	if err != nil {
+		return "", &RequestError{r.URL.Path, "No index found",
+			http.StatusNotFound}
+	}
+
+	// Check the index isn't another directory
+	fi, err := os.Stat(index)
 	if err != nil {
 		return "", err
 	} else if fi.IsDir() {
-		// Search for indexes
-		for _, i := range indexes {
-			var index string
-			log.Printf("|-> Find index: %s\n", filepath.Join(p, i))
-			index, err = resolvePath(filepath.Join(p, i))
-			if err == nil {
-				p = index
-				break
-			}
-		}
-		// No index found
-		if err != nil {
-			return "", errors.New(fmt.Sprintf("Failed to get index for '%s'", p))
-		}
-
-		// Check the index isn't another directory
-		fi, err = os.Stat(p)
-		if err != nil {
-			return "", err
-		} else if fi.IsDir() {
-			return "", errors.New(fmt.Sprintf("Found directory looking for '%s'",
-				p))
-		}
+		return "", &RequestError{r.URL.Path, "Found directoy looking for index",
+			http.StatusInternalServerError}
 	}
 
+	return index, nil
+}
+
+func checkAccess(p string, r *http.Request) error {
 	// Not allowed to traverse above root
 	relp, err := filepath.Rel(root, p)
 	if err != nil {
 		log.Printf("|-> Couldn't get relative path: %s", p)
-		return "", &RequestError{r.URL.Path, "No relative path",
+		return &RequestError{r.URL.Path, "No relative path",
 			http.StatusNotFound}
 	} else if len(relp) > 1 && relp[:2] == ".." {
 		log.Printf("|-> Traverse above root: %s", relp)
-		return "", os.ErrPermission
+		return &RequestError{r.URL.Path, "permission denied",
+			http.StatusForbidden}
 	}
 
 	// Filter
 	for _, rex := range filters {
-		if rex.MatchString(p) {
+		if rex.MatchString(relp) {
 			log.Printf("|-> Matched on filter: %s", rex)
-			return "", &RequestError{r.URL.Path, "Request filtered",
+			return &RequestError{r.URL.Path, "Request filtered",
 				http.StatusNotFound}
 		}
 	}
@@ -291,18 +287,64 @@ func resolveRequest(r *http.Request) (string, error) {
 		defer f.Close()
 	}
 
-	return p, err
+	return err
+}
+
+func replaceTrailingSlash(p string, request string) string {
+	if request[len(request) - 1] == '/' && p[len(p) - 1] != '/' {
+		return p + "/"
+	}
+	return p
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s\n", dumpRequest(r))
 
-	file, err := resolveRequest(r)
+	p := filepath.Join(root, r.URL.Path)
+
+	p, err := resolvePath(p)
+	if err != nil {
+		handleError(w, r, err)
+		return
+	}
+
+	fi, err := os.Stat(p)
+	if err != nil {
+		handleError(w, r, err)
+		return
+	} else if fi.IsDir() {
+		p = replaceTrailingSlash(p, r.URL.Path)
+		if p[len(p) - 1] != '/' {
+			// Force a trailing slash, which makes sure relative resources
+			// resolve properly
+			p, err = filepath.Rel(root, p)
+			p = "/" + p + "/"
+		} else {
+			p, err = findIndex(p, r)
+			if err != nil {
+				handleError(w, r, err)
+				return
+			} else {
+				p, err = filepath.Rel(root, p)
+				p = "/" + p
+			}
+		}
+
+		if err != nil {
+			handleError(w, r, err)
+		} else {
+			// FIXME: Do we really want to redirect indexes?
+			handleRedirect(w, r, p)
+		}
+		return
+	}
+
+	err = checkAccess(p, r)
 	if err != nil {
 		handleError(w, r, err)
 	} else {
-		log.Printf("|-> Resolved: %s\n", file)
-		handleFile(w, r, file)
+		log.Printf("|-> Resolved: %s\n", p)
+		handleFile(w, r, p)
 	}
 }
 
