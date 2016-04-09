@@ -160,7 +160,8 @@ func serveMarkdown(w http.ResponseWriter, r *http.Request, file string) {
 
 func handleFile(w http.ResponseWriter, r *http.Request, filename string) {
 	ext := filepath.Ext(filename)
-	if ext == ".md" {
+	_, raw := r.Form["raw"]
+	if ext == ".md" && !raw {
 		serveMarkdown(w, r, filename)
 	} else {
 		log.Printf("`-> Serving file: %s\n", filename)
@@ -344,7 +345,12 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		handleError(w, r, err)
 	} else {
 		log.Printf("|-> Resolved: %s\n", p)
-		handleFile(w, r, p)
+		err = r.ParseForm()
+		if err != nil {
+			handleError(w, r, err)
+		} else {
+			handleFile(w, r, p)
+		}
 	}
 }
 
