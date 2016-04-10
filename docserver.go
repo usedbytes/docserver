@@ -26,9 +26,11 @@ import (
 	"fmt"
 	"github.com/codegangsta/cli"
 	"github.com/shurcooL/github_flavored_markdown"
+	"github.com/coreos/go-systemd/activation"
 	"io/ioutil"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -403,11 +405,26 @@ func runServer(c *cli.Context) {
 		}
 	}
 
-	addr := c.GlobalString("addr")
-	log.Printf("Serving on '%s'\n", addr)
+	var l net.Listener
+
+	// Try for socket activation, fall back to --addr
+	listeners, err := activation.Listeners(false)
+	if err != nil {
+		log.Fatal(err)
+	} else if len(listeners) == 1 {
+		log.Printf("Serving on received socket: %s\n", listeners[0].Addr())
+		l = listeners[0]
+	} else {
+		addr := c.GlobalString("addr")
+		log.Printf("Serving on '%s'\n", addr)
+		l, err = net.Listen("tcp", addr)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
 
 	http.HandleFunc("/", handleRequest)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	log.Fatal(http.Serve(l, nil))
 }
 
 func main() {
@@ -443,7 +460,9 @@ func main() {
 		cli.StringFlag{
 			Name:  "addr",
 			Value: ":8000",
-			Usage: "addr:port to listen on",
+			Usage: "addr:port to listen on. Before attempting to bind to\n" +
+				"\tthis address, the environment will be checked for\n" +
+				"\tsockets passed in the environment from systemd",
 		},
 		cli.BoolFlag{
 			Name: "chroot",
