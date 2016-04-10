@@ -431,7 +431,7 @@ func main() {
 	app := cli.NewApp()
 	app.Name = "docserver"
 	app.Usage = "Simple webserver for serving markdown files"
-	app.Version = "0.0.1"
+	app.Version = "0.0.2"
 	app.Flags = []cli.Flag{
 		cli.StringFlag{
 			Name:  "template",
