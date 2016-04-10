@@ -30,6 +30,7 @@ is executed:
 * Support for chroot()-ing into the document root (not actually sure if this
   is a good idea?)
 * Files called `README.md` or `index.md` will be used for directory indexes
+* Support for systemd socket activation
 
 ## Examples
 
@@ -48,4 +49,29 @@ $ docserver --filter bar --filter baz --root /srv/foo
 Serve files from `/srv/foo` on port 9000, and chroot() into `/srv/foo`:
 ```
 # docserver --addr ':9000' --root /srv/foo --chroot
+```
+
+Run a socket activated server (systemd .socket and .service files):
+```
+# ======================
+# File: docserver.socket
+# ======================
+[Unit]
+Description=Docserver socket
+
+[Socket]
+ListenStream=80
+
+[Install]
+WantedBy=sockets.target
+```
+```
+# =======================
+# File: docserver.service
+# =======================
+[Unit]
+Description=Docserver
+
+[Service]
+ExecStart=/path/to/docserver --root=/path/to/srv
 ```
