@@ -253,7 +253,7 @@ func findIndex(dir string, r *http.Request) (index string, err error) {
 	if err != nil {
 		return "", err
 	} else if fi.IsDir() {
-		return "", &RequestError{r.URL.Path, "Found directoy looking for index",
+		return "", &RequestError{r.URL.Path, "Found directory looking for index",
 			http.StatusInternalServerError}
 	}
 
