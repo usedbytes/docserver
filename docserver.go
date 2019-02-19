@@ -408,7 +408,7 @@ func runServer(c *cli.Context) {
 	var l net.Listener
 
 	// Try for socket activation, fall back to --addr
-	listeners, err := activation.Listeners(false)
+	listeners, err := activation.Listeners()
 	if err != nil {
 		log.Fatal(err)
 	} else if len(listeners) == 1 {
