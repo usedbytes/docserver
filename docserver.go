@@ -24,7 +24,7 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/codegangsta/cli"
+	"github.com/urfave/cli"
 	"github.com/shurcooL/github_flavored_markdown"
 	"github.com/coreos/go-systemd/activation"
 	"io/ioutil"
@@ -356,10 +356,10 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func runServer(c *cli.Context) {
+func runServer(c *cli.Context) error {
 	var err error
 
-	templateFile := c.GlobalString("template")
+	templateFile := c.String("template")
 	if templateFile == "" {
 		pageTemplate, err = template.New("page").Parse(defaultPage)
 	} else {
@@ -370,7 +370,7 @@ func runServer(c *cli.Context) {
 		log.Fatalf("Error parsing template: %s\n", err)
 	}
 
-	templateFile = c.GlobalString("error-template")
+	templateFile = c.String("error-template")
 	if templateFile == "" {
 		errorTemplate, err = template.New("error-page").Parse(errorPage)
 	} else {
@@ -381,10 +381,10 @@ func runServer(c *cli.Context) {
 		log.Fatalf("Error parsing error-template: %s\n", err)
 	}
 
-	root = c.GlobalString("root")
+	root = c.String("root")
 	log.Printf("Document root: %s\n", root)
 
-	if c.GlobalBool("chroot") {
+	if c.Bool("chroot") {
 		log.Printf("`-> chroot() into document root\n")
 		err = syscall.Chroot(root)
 		if err != nil {
@@ -393,7 +393,7 @@ func runServer(c *cli.Context) {
 		root = "/"
 	}
 
-	filterFlag := c.GlobalStringSlice("filter")
+	filterFlag := c.StringSlice("filter")
 	if len(filterFlag) > 0 {
 		filters = make([]*regexp.Regexp, len(filterFlag))
 		for i, f := range filterFlag {
@@ -415,7 +415,7 @@ func runServer(c *cli.Context) {
 		log.Printf("Serving on received socket: %s\n", listeners[0].Addr())
 		l = listeners[0]
 	} else {
-		addr := c.GlobalString("addr")
+		addr := c.String("addr")
 		log.Printf("Serving on '%s'\n", addr)
 		l, err = net.Listen("tcp", addr)
 		if err != nil {
@@ -425,15 +425,17 @@ func runServer(c *cli.Context) {
 
 	http.HandleFunc("/", handleRequest)
 	log.Fatal(http.Serve(l, nil))
+
+	return nil
 }
 
 func main() {
 	app := cli.NewApp()
 	app.Name = "docserver"
 	app.Usage = "Simple webserver for serving markdown files"
-	app.Version = "0.0.2"
+	app.Version = "0.0.3"
 	app.Flags = []cli.Flag{
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "template",
 			Value: "",
 			Usage: "Template file for rendering Markdown pages - see text/template.\n" +
@@ -442,7 +444,7 @@ func main() {
 				"\t\t.Title:  Page title\n" +
 				"\t\t.Markup: HTML page content",
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "error-template",
 			Value: "",
 			Usage: "Template file for rendering error pages - see text/template.\n" +
@@ -452,24 +454,24 @@ func main() {
 				"\t\t.Code: HTTP status code\n" +
 				"\t\t.Msg:  Error message",
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "root",
 			Value: ".",
 			Usage: "Root directory to serve files from",
 		},
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  "addr",
 			Value: ":8000",
 			Usage: "addr:port to listen on. Before attempting to bind to\n" +
 				"\tthis address, the environment will be checked for\n" +
 				"\tsockets passed in the environment from systemd",
 		},
-		cli.BoolFlag{
+		&cli.BoolFlag{
 			Name: "chroot",
 			Usage: "If set, the server will chroot() to its document root " +
 				   "upon starting",
 		},
-		cli.StringSliceFlag{
+		&cli.StringSliceFlag{
 			Name: "filter",
 			Usage: "Regular expression to use for request filtering.\n" +
 				"\tAny requests which resolve to a file matching any filter will 404",
